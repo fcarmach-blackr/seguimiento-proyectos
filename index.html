@@ -808,45 +808,110 @@ async function toggleRecord() {
   }
 }
 
-// generateSQL - generates SQL template for manual Supabase entry
+// generateSQL - parses natural language order and generates ready SQL
 function generateSQL() {
   const orden = document.getElementById('claude-input').value.trim();
   if (!orden) { alert('Escribe una orden primero.'); return; }
 
   const statusEl = document.getElementById('claude-status');
   statusEl.style.display = 'block';
-  statusEl.style.background = 'rgba(59,130,246,.08)';
-  statusEl.style.color = 'var(--text-dim)';
-  statusEl.style.border = '1px solid rgba(59,130,246,.2)';
-  statusEl.style.padding = '14px';
 
-  const proyectosLista = PROYECTOS.map(p => `  -- ${p.nombre}  →  id: '${p.id}'`).join('\n');
-  const hitosLista = HITOS.map(h => `  -- ${h.tarea}  →  id: '${h.id}'`).join('\n');
+  // ── PARSE ORDER ────────────────────────────────────────────────────────────
+  const ordenLower = orden.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 
-  const sql = `-- ORDEN: ${orden.replace(/`/g,"'")}
---
--- PROYECTOS DISPONIBLES:
-${proyectosLista}
---
--- HITOS DISPONIBLES:
-${hitosLista}
---
--- ESTADOS: no_iniciado | pendiente | en_proceso | completado | no_aplica
--- Edita los valores en MAYÚSCULAS y ejecuta:
+  // Find project (fuzzy match)
+  let proyecto = null;
+  for (const p of PROYECTOS) {
+    const nombre = p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    if (ordenLower.includes(nombre) || nombre.split(' ').every(w => w.length > 2 && ordenLower.includes(w))) {
+      proyecto = p; break;
+    }
+  }
+  // Try partial match
+  if (!proyecto) {
+    for (const p of PROYECTOS) {
+      const words = p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(' ');
+      if (words.some(w => w.length > 3 && ordenLower.includes(w))) { proyecto = p; break; }
+    }
+  }
 
-INSERT INTO hitos_proyectos
+  // Find hito (fuzzy match)
+  let hito = null;
+  let bestScore = 0;
+  for (const h of HITOS) {
+    const tarea = h.tarea.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const words = tarea.split(' ').filter(w => w.length > 3);
+    const score = words.filter(w => ordenLower.includes(w)).length;
+    if (score > bestScore) { bestScore = score; hito = h; }
+  }
+
+  // Parse estado
+  const ESTADOS_MAP = {
+    'en proceso': 'en_proceso', 'en_proceso': 'en_proceso', 'proceso': 'en_proceso',
+    'completado': 'completado', 'completo': 'completado', 'terminado': 'completado', 'listo': 'completado',
+    'pendiente': 'pendiente',
+    'no iniciado': 'no_iniciado', 'no_iniciado': 'no_iniciado',
+    'no aplica': 'no_aplica', 'no_aplica': 'no_aplica'
+  };
+  let estado = 'pendiente';
+  for (const [key, val] of Object.entries(ESTADOS_MAP)) {
+    if (ordenLower.includes(key)) { estado = val; break; }
+  }
+
+  // Parse date - look for DD/MM/YYYY, YYYY-MM-DD, or "15 de agosto de 2026" etc
+  let fecha = null;
+  let fechaMatch = orden.match(/(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
+  if (fechaMatch) {
+    const [,d,m,y] = fechaMatch;
+    fecha = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  } else {
+    fechaMatch = orden.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (fechaMatch) fecha = fechaMatch[0];
+  }
+  // Text dates: "15 agosto 2026", "15 de agosto de 2026"
+  if (!fecha) {
+    const MESES = {enero:'01',febrero:'02',marzo:'03',abril:'04',mayo:'05',junio:'06',
+                   julio:'07',agosto:'08',septiembre:'09',octubre:'10',noviembre:'11',diciembre:'12'};
+    const mMatch = orden.toLowerCase().match(/(\d{1,2})\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?(\d{4}))?/);
+    if (mMatch) {
+      const d = mMatch[1].padStart(2,'0');
+      const m = MESES[mMatch[2]];
+      const y = mMatch[3] || new Date().getFullYear();
+      fecha = `${y}-${m}-${d}`;
+    }
+  }
+
+  // Parse descripcion - text after "descripcion:", "desc:", "interaccion:"
+  let descripcion = '';
+  const descMatch = orden.match(/(?:descripci[oó]n|desc|interacci[oó]n)\s*:\s*(.+?)(?:\s*,\s*(?:nota|notas)\s*:|$)/i);
+  if (descMatch) descripcion = descMatch[1].trim();
+
+  // Parse notas - text after "nota:", "notas:"
+  let notas = '';
+  const notaMatch = orden.match(/(?:nota|notas)\s*:\s*(.+?)$/i);
+  if (notaMatch) notas = notaMatch[1].trim();
+
+  // ── VALIDATE ───────────────────────────────────────────────────────────────
+  const warnings = [];
+  if (!proyecto) warnings.push('⚠ No se reconoció el proyecto — verifica el nombre');
+  if (!hito || bestScore === 0) warnings.push('⚠ No se reconoció el hito — verifica la tarea');
+
+  // ── BUILD SQL ──────────────────────────────────────────────────────────────
+  const pId = proyecto ? proyecto.id : 'PROYECTO_ID';
+  const pNombre = proyecto ? proyecto.nombre : 'Nombre Proyecto';
+  const hId = hito ? hito.id : 'HITO_ID';
+  const hSeccion = hito ? hito.seccion : 'SECCIÓN';
+  const hTarea = hito ? hito.tarea : 'Tarea';
+  const fechaSQL = fecha ? `'${fecha}'` : 'NULL';
+  const descSQL = descripcion.replace(/'/g,"''");
+  const notasSQL = notas.replace(/'/g,"''");
+
+  const sql = `INSERT INTO hitos_proyectos
   (proyecto_id, proyecto_nombre, hito_id, seccion, tarea,
    estado, fecha_proxima_interaccion, descripcion_interaccion, notas)
 VALUES (
-  'PROYECTO_ID',
-  'Nombre Proyecto',
-  'HITO_ID',
-  'SECCIÓN',
-  'Tarea',
-  'ESTADO',
-  'YYYY-MM-DD',
-  'Descripción de la próxima interacción',
-  'Notas adicionales'
+  '${pId}', '${pNombre}', '${hId}', '${hSeccion}', '${hTarea}',
+  '${estado}', ${fechaSQL}, '${descSQL}', '${notasSQL}'
 )
 ON CONFLICT (proyecto_id, hito_id) DO UPDATE SET
   estado                    = EXCLUDED.estado,
@@ -855,9 +920,27 @@ ON CONFLICT (proyecto_id, hito_id) DO UPDATE SET
   notas                     = EXCLUDED.notas,
   updated_at                = now();`;
 
+  const warningHtml = warnings.length
+    ? `<div style="margin-bottom:8px;padding:6px 10px;background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.2);border-radius:6px;font-size:11px;color:var(--yellow)">${warnings.join('<br>')}</div>`
+    : '';
+
+  const parsedHtml = `<div style="margin-bottom:8px;font-size:11px;color:var(--text-muted)">
+    Interpretado: <strong style="color:var(--text)">${pNombre}</strong> →
+    <strong style="color:var(--text)">${hTarea}</strong> →
+    <strong style="color:var(--accent2)">${estado}</strong>
+    ${fecha ? `→ <strong style="color:var(--green)">${fecha}</strong>` : ''}
+  </div>`;
+
+  statusEl.style.background = warnings.length ? 'rgba(234,179,8,.06)' : 'rgba(59,130,246,.06)';
+  statusEl.style.color = 'var(--text-dim)';
+  statusEl.style.border = warnings.length ? '1px solid rgba(234,179,8,.2)' : '1px solid rgba(59,130,246,.2)';
+  statusEl.style.padding = '14px';
+
   statusEl.innerHTML = `
+    ${warningHtml}
+    ${parsedHtml}
     <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <span style="font-weight:700;color:var(--accent2)">SQL listo — edita los valores en MAYÚSCULAS y pégalo en Supabase</span>
+      <span style="font-weight:700;color:var(--accent2)">SQL listo para Supabase</span>
       <div style="display:flex;gap:8px">
         <button id="btn-copy-sql" onclick="copySQL()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">📋 Copiar SQL</button>
         <a href="https://supabase.com/dashboard/project/yaxyqrykeavuhqjwvwji/sql/new" target="_blank" style="background:var(--surface2);color:var(--accent2);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;text-decoration:none">↗ Abrir Supabase</a>
