@@ -764,62 +764,47 @@ async function processXlsx(file) {
 let mediaRecorder=null, audioChunks=[], isRecording=false;
 
 async function toggleRecord() {
-  const btn=document.getElementById('btn-record');
-  const statusEl=document.getElementById('record-status');
+  const btn = document.getElementById('btn-record');
+  const statusEl = document.getElementById('record-status');
 
   if (!isRecording) {
-    try {
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[];
-      mediaRecorder=new MediaRecorder(stream);
-      mediaRecorder.ondataavailable=e=>audioChunks.push(e.data);
-      mediaRecorder.onstop=async()=>{
-        stream.getTracks().forEach(t=>t.stop());
-        statusEl.textContent='⟳ Transcribiendo audio...';
-        const blob=new Blob(audioChunks,{type:'audio/webm'});
-        // Convert to base64 and send to Claude for transcription
-        const reader=new FileReader();
-        reader.onload=async()=>{
-          const b64=reader.result.split(',')[1];
-          try {
-            const resp=await fetch('https://api.anthropic.com/v1/messages',{
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({
-                model:'claude-sonnet-4-6',
-                max_tokens:500,
-                messages:[{role:'user',content:[
-                  {type:'text',text:'Transcribe este audio exactamente como fue dicho, sin agregar nada:'},
-                  {type:'document',source:{type:'base64',media_type:'audio/webm',data:b64}}
-                ]}]
-              })
-            });
-            const data=await resp.json();
-            if(data.content?.[0]?.text){
-              document.getElementById('claude-input').value=data.content[0].text;
-              statusEl.textContent='✓ Audio transcrito';
-            } else {
-              statusEl.textContent='No se pudo transcribir. Escribe la orden manualmente.';
-            }
-          } catch(e){
-            statusEl.textContent='Error transcribiendo. Escribe la orden manualmente.';
-          }
-        };
-        reader.readAsDataURL(blob);
-      };
-      mediaRecorder.start();
-      isRecording=true;
-      btn.textContent='⏹ Detener grabación';
-      btn.style.background='var(--red-bg)';btn.style.color='var(--red)';btn.style.border='1px solid rgba(239,68,68,.3)';
-      statusEl.textContent='🔴 Grabando...';
-    } catch(e){
-      statusEl.textContent='No se pudo acceder al micrófono.';
+    // Use Web Speech API for transcription (no external API needed)
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      statusEl.textContent = 'Tu navegador no soporta reconocimiento de voz. Usa Chrome.';
+      return;
     }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-CL';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      document.getElementById('claude-input').value = transcript;
+      statusEl.textContent = '✓ Audio transcrito — revisa y haz clic en Generar SQL';
+    };
+    recognition.onerror = () => {
+      statusEl.textContent = 'Error al reconocer. Intenta de nuevo.';
+    };
+    recognition.onend = () => {
+      isRecording = false;
+      btn.textContent = '🎤 Grabar audio';
+      btn.style.background = ''; btn.style.color = ''; btn.style.border = '';
+    };
+
+    recognition.start();
+    isRecording = true;
+    btn.textContent = '⏹ Detener';
+    btn.style.background = 'var(--red-bg)'; btn.style.color = 'var(--red)'; btn.style.border = '1px solid rgba(239,68,68,.3)';
+    statusEl.textContent = '🔴 Habla ahora...';
+    window._recognition = recognition;
+
   } else {
-    mediaRecorder.stop();
-    isRecording=false;
-    btn.textContent='🎤 Grabar audio';
-    btn.style.background='';btn.style.color='';btn.style.border='';
+    if (window._recognition) window._recognition.stop();
+    isRecording = false;
+    btn.textContent = '🎤 Grabar audio';
+    btn.style.background = ''; btn.style.color = ''; btn.style.border = '';
   }
 }
 
