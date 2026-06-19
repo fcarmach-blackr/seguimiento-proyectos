@@ -903,20 +903,11 @@ Infiere el proyecto_id y hito_id desde los nombres que use el usuario.`;
     statusEl.style.background='rgba(34,197,94,.1)';statusEl.style.color='var(--green)';statusEl.style.border='1px solid rgba(34,197,94,.2)';
     const resumen=toUpsert.map(c=>`• ${c.proyecto_nombre} → ${c.tarea}: ${c.estado}`).join('\n');
     statusEl.innerHTML='✓ Cambios aplicados:<br><pre style="margin-top:6px;font-size:11px;opacity:.8">'+resumen+'</pre>';
-    document.getElementById('claude-input').value='';
-    await loadData();
-
-  } catch(e){
-    statusEl.style.background='rgba(239,68,68,.1)';statusEl.style.color='var(--red)';statusEl.style.border='1px solid rgba(239,68,68,.2)';
-    statusEl.textContent='✕ Error: '+e.message;
-  } finally {
-    btn.disabled=false;
-  }
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.getElementById('today-badge').textContent='Hoy: '+TODAY.toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'});
-loadData();
+(async()=>{ await loadData(); })();
 </script>
 </body>
 </html>
