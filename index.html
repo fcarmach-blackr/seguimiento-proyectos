@@ -823,86 +823,72 @@ async function toggleRecord() {
   }
 }
 
-// generateSQL parses the order locally and produces SQL for Supabase
+// generateSQL - generates SQL template for manual Supabase entry
 function generateSQL() {
-  const orden=document.getElementById('claude-input').value.trim();
-  if(!orden){alert('Escribe una orden primero.');return;}
+  const orden = document.getElementById('claude-input').value.trim();
+  if (!orden) { alert('Escribe una orden primero.'); return; }
 
-  const statusEl=document.getElementById('claude-status');
-  const btn=document.getElementById('btn-claude');
-  statusEl.style.display='block';
-  statusEl.style.background='rgba(234,179,8,.1)';statusEl.style.color='var(--yellow)';statusEl.style.border='1px solid rgba(234,179,8,.2)';
-  statusEl.textContent='⟳ Claude está interpretando tu orden...';
-  btn.disabled=true;
+  const statusEl = document.getElementById('claude-status');
+  statusEl.style.display = 'block';
+  statusEl.style.background = 'rgba(59,130,246,.08)';
+  statusEl.style.color = 'var(--text-dim)';
+  statusEl.style.border = '1px solid rgba(59,130,246,.2)';
+  statusEl.style.padding = '14px';
 
-  // Build context of current projects and hitos
-  const ctx=PROYECTOS.map(p=>p.nombre).join(', ');
-  const hitosCtx=HITOS.map(h=>`${h.id} (${h.seccion} → ${h.tarea})`).join('\n');
-  const estadosValidos='no_iniciado, pendiente, en_proceso, completado, no_aplica';
+  const proyectosLista = PROYECTOS.map(p => `  -- ${p.nombre}  →  id: '${p.id}'`).join('\n');
+  const hitosLista = HITOS.map(h => `  -- ${h.tarea}  →  id: '${h.id}'`).join('\n');
 
-  const systemPrompt=`Eres un asistente que actualiza una base de datos de proyectos inmobiliarios.
-Los proyectos son: ${ctx}
-Los hitos disponibles (id → sección → tarea):
-${hitosCtx}
-Estados válidos: ${estadosValidos}
+  const sql = `-- ORDEN: ${orden.replace(/`/g,"'")}
+--
+-- PROYECTOS DISPONIBLES:
+${proyectosLista}
+--
+-- HITOS DISPONIBLES:
+${hitosLista}
+--
+-- ESTADOS: no_iniciado | pendiente | en_proceso | completado | no_aplica
+-- Edita los valores en MAYÚSCULAS y ejecuta:
 
-El usuario dará una orden en lenguaje natural. Debes responder ÚNICAMENTE con un array JSON de objetos con esta estructura exacta, sin texto adicional:
-[{"proyecto_id":"id_proyecto","hito_id":"id_hito","estado":"estado","fecha_proxima_interaccion":"YYYY-MM-DD o null","descripcion_interaccion":"texto","notas":"texto"}]
+INSERT INTO hitos_proyectos
+  (proyecto_id, proyecto_nombre, hito_id, seccion, tarea,
+   estado, fecha_proxima_interaccion, descripcion_interaccion, notas)
+VALUES (
+  'PROYECTO_ID',
+  'Nombre Proyecto',
+  'HITO_ID',
+  'SECCIÓN',
+  'Tarea',
+  'ESTADO',
+  'YYYY-MM-DD',
+  'Descripción de la próxima interacción',
+  'Notas adicionales'
+)
+ON CONFLICT (proyecto_id, hito_id) DO UPDATE SET
+  estado                    = EXCLUDED.estado,
+  fecha_proxima_interaccion = EXCLUDED.fecha_proxima_interaccion,
+  descripcion_interaccion   = EXCLUDED.descripcion_interaccion,
+  notas                     = EXCLUDED.notas,
+  updated_at                = now();`;
 
-Si la fecha no se menciona, usa null. Si algún campo no se menciona, omítelo del objeto.
-Infiere el proyecto_id y hito_id desde los nombres que use el usuario.`;
+  statusEl.innerHTML = `
+    <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span style="font-weight:700;color:var(--accent2)">SQL listo — edita los valores en MAYÚSCULAS y pégalo en Supabase</span>
+      <div style="display:flex;gap:8px">
+        <button id="btn-copy-sql" onclick="copySQL()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">📋 Copiar SQL</button>
+        <a href="https://supabase.com/dashboard/project/yaxyqrykeavuhqjwvwji/sql/new" target="_blank" style="background:var(--surface2);color:var(--accent2);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;text-decoration:none">↗ Abrir Supabase</a>
+      </div>
+    </div>
+    <pre id="sql-output" style="font-family:'SF Mono',monospace;font-size:10px;white-space:pre-wrap;line-height:1.6;overflow-x:auto;margin:0">${sql.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+}
 
-  try {
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:1000,
-        system:systemPrompt,
-        messages:[{role:'user',content:orden}]
-      })
-    });
-    const data=await resp.json();
-    const text=data.content?.[0]?.text||'';
-
-    // Parse JSON from response
-    const match=text.match(/\[[\s\S]*\]/);
-    if(!match) throw new Error('Claude no devolvió el formato esperado: '+text.slice(0,200));
-
-    const changes=JSON.parse(match[0]);
-    if(!changes.length) throw new Error('No se identificaron cambios en la orden.');
-
-    statusEl.textContent=`⟳ Aplicando ${changes.length} cambio(s)...`;
-
-    // Enrich with proyecto_nombre, seccion, tarea before upsert
-    const toUpsert=changes.map(c=>{
-      const proy=PROYECTOS.find(p=>p.id===c.proyecto_id);
-      const hito=HITOS.find(h=>h.id===c.hito_id);
-      if(!proy||!hito) return null;
-      return {
-        proyecto_id:c.proyecto_id,
-        proyecto_nombre:proy.nombre,
-        hito_id:c.hito_id,
-        seccion:hito.seccion,
-        tarea:hito.tarea,
-        estado:c.estado||getRow(c.proyecto_id,c.hito_id).estado||'no_iniciado',
-        fecha_proxima_interaccion:c.fecha_proxima_interaccion||null,
-        descripcion_interaccion:c.descripcion_interaccion??getRow(c.proyecto_id,c.hito_id).descripcion_interaccion??'',
-        notas:c.notas??getRow(c.proyecto_id,c.hito_id).notas??'',
-      };
-    }).filter(Boolean);
-
-    const r=await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}?on_conflict=proyecto_id,hito_id`,{
-      method:'POST',
-      headers:{...headers,'Prefer':'resolution=merge-duplicates,return=minimal','on_conflict':'proyecto_id,hito_id'},
-      body:JSON.stringify(toUpsert)
-    });
-    if(!r.ok) throw new Error(await r.text());
-
-    statusEl.style.background='rgba(34,197,94,.1)';statusEl.style.color='var(--green)';statusEl.style.border='1px solid rgba(34,197,94,.2)';
-    const resumen=toUpsert.map(c=>`• ${c.proyecto_nombre} → ${c.tarea}: ${c.estado}`).join('\n');
-    statusEl.innerHTML='✓ Cambios aplicados:<br><pre style="margin-top:6px;font-size:11px;opacity:.8">'+resumen+'</pre>';
+function copySQL() {
+  const sql = document.getElementById('sql-output').textContent;
+  navigator.clipboard.writeText(sql).then(() => {
+    const btn = document.getElementById('btn-copy-sql');
+    btn.textContent = '✓ Copiado';
+    btn.style.background = 'var(--green)';
+    setTimeout(() => { btn.textContent = '📋 Copiar SQL'; btn.style.background = 'var(--accent)'; }, 2000);
+  });
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
