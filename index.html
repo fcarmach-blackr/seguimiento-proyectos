@@ -215,18 +215,37 @@
     </div>
   </div>
 
+  <!-- EXCEL UPLOAD -->
   <div class="card">
-    <div class="card-header"><span class="card-title">🎤 Actualización via Claude (voz o texto)</span></div>
+    <div class="card-header"><span class="card-title">📊 Actualizar desde Planilla Excel</span></div>
     <div class="update-body">
-      <p class="update-desc">Descarga la DB JSON con el botón del header, adjúntala a Claude y describe en lenguaje natural qué actualizar. Claude devuelve el JSON actualizado — pégalo en el SQL Editor de Supabase o pídele a Claude que lo suba directamente.</p>
-      <div class="prompt-box">Prompt para Claude:
+      <p class="update-desc">Descarga la planilla, edita las columnas Estado · Fecha · Descripción · Notas, y súbela aquí. Los cambios se aplicarán directamente a la base de datos.</p>
+      <div id="xlsx-drop" style="border:2px dashed var(--border);border-radius:10px;padding:28px;text-align:center;cursor:pointer;transition:all .2s">
+        <input type="file" id="xlsx-input" accept=".xlsx,.xls" style="display:none">
+        <label for="xlsx-input" style="cursor:pointer">
+          <div style="font-size:28px;margin-bottom:8px">📂</div>
+          <div style="color:var(--text-dim);font-size:13px">Arrastra la planilla aquí o <strong style="color:var(--accent2)">haz clic para seleccionar</strong></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">seguimiento_proyectos.xlsx</div>
+        </label>
+      </div>
+      <div id="xlsx-status" style="display:none;margin-top:12px;padding:12px;border-radius:8px;font-size:12px"></div>
+    </div>
+  </div>
 
-"Adjunto mi base de datos inmobiliaria (proyectos_db.json).
-Aplica estos cambios y devuelve el JSON completo actualizado:
-
-[tu actualización aquí]
-
-Responde SOLO con el JSON, sin texto adicional."</div>
+  <!-- CLAUDE TEXT/AUDIO -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">🎤 Actualizar con orden de texto o audio</span></div>
+    <div class="update-body">
+      <p class="update-desc">Escribe una orden en lenguaje natural o graba un audio. Claude interpretará los cambios y los aplicará directamente a la base de datos.</p>
+      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:flex-start">
+        <textarea id="claude-input" placeholder="Ej: Vilcun, Firma contrato ancla: estado en proceso, fecha 15/08/2026, descripción: reunión confirmada con ancla..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;padding:10px 12px;font-family:inherit;outline:none;resize:vertical;min-height:80px;transition:border-color .15s" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button onclick="sendToClaude()" class="btn btn-accent" id="btn-claude">✨ Aplicar cambios</button>
+        <button onclick="toggleRecord()" class="btn btn-ghost" id="btn-record">🎤 Grabar audio</button>
+        <span id="record-status" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+      <div id="claude-status" style="display:none;margin-top:12px;padding:12px;border-radius:8px;font-size:12px;line-height:1.5"></div>
     </div>
   </div>
 </main>
@@ -592,6 +611,269 @@ function downloadXlsx() {
 
 // ── AUTO REFRESH cada 60 segundos ─────────────────────────────────────────────
 setInterval(loadData, 60000);
+
+// ── EXCEL UPLOAD & PARSE ──────────────────────────────────────────────────────
+const xlsxDrop = document.getElementById('xlsx-drop');
+xlsxDrop.addEventListener('dragover', e=>{e.preventDefault();xlsxDrop.style.borderColor='var(--accent)';xlsxDrop.style.background='rgba(59,130,246,.04)';});
+xlsxDrop.addEventListener('dragleave', ()=>{xlsxDrop.style.borderColor='var(--border)';xlsxDrop.style.background='';});
+xlsxDrop.addEventListener('drop', e=>{
+  e.preventDefault();xlsxDrop.style.borderColor='var(--border)';xlsxDrop.style.background='';
+  if(e.dataTransfer.files[0]) processXlsx(e.dataTransfer.files[0]);
+});
+document.getElementById('xlsx-input').addEventListener('change', e=>{
+  if(e.target.files[0]) processXlsx(e.target.files[0]);
+});
+
+async function processXlsx(file) {
+  const status = document.getElementById('xlsx-status');
+  status.style.display='block';
+  status.style.background='rgba(234,179,8,.1)';
+  status.style.color='var(--yellow)';
+  status.style.border='1px solid rgba(234,179,8,.2)';
+  status.textContent='⟳ Leyendo planilla...';
+
+  try {
+    // Load SheetJS from CDN
+    if (!window.XLSX_LIB) {
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        s.onload=()=>{window.XLSX_LIB=true;res();};
+        s.onerror=rej;
+        document.head.appendChild(s);
+      });
+    }
+
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {raw:false, dateNF:'yyyy-mm-dd'});
+
+    // Filter out separator rows (no hito_id) and build upsert list
+    const toUpsert = [];
+    for (const row of rows) {
+      const hitoId = row['ID hito'];
+      const proyNombre = row['Proyecto'];
+      if (!hitoId || !proyNombre || hitoId.startsWith('▸')) continue;
+
+      const proy = PROYECTOS.find(p=>p.nombre===proyNombre);
+      const hito = HITOS.find(h=>h.id===hitoId);
+      if (!proy || !hito) continue;
+
+      // Only upsert if estado is set and not the default empty
+      const estado = (row['Estado']||'no_iniciado').trim();
+      let fecha = row['Fecha próx. interacción']||null;
+      // Normalize date to YYYY-MM-DD
+      if (fecha) {
+        fecha = fecha.toString().trim();
+        // Handle DD/MM/YYYY
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(fecha)) {
+          const [d,m,y]=fecha.split('/');
+          fecha=`${y}-${m}-${d}`;
+        }
+        // Handle DD-MM-YYYY
+        if (/^\d{2}-\d{2}-\d{4}$/.test(fecha)) {
+          const [d,m,y]=fecha.split('-');
+          fecha=`${y}-${m}-${d}`;
+        }
+      }
+
+      toUpsert.push({
+        proyecto_id: proy.id,
+        proyecto_nombre: proy.nombre,
+        hito_id: hitoId,
+        seccion: hito.seccion,
+        tarea: hito.tarea,
+        estado,
+        fecha_proxima_interaccion: fecha||null,
+        descripcion_interaccion: (row['Descripción interacción']||'').trim(),
+        notas: (row['Notas']||'').trim(),
+      });
+    }
+
+    if (!toUpsert.length) {
+      status.style.background='rgba(239,68,68,.1)';status.style.color='var(--red)';status.style.border='1px solid rgba(239,68,68,.2)';
+      status.textContent='✕ No se encontraron filas válidas en la planilla.';
+      return;
+    }
+
+    status.textContent=`⟳ Aplicando ${toUpsert.length} cambios a la base de datos...`;
+
+    // Upsert in batches of 50
+    let ok=0;
+    for (let i=0;i<toUpsert.length;i+=50) {
+      const batch=toUpsert.slice(i,i+50);
+      const r=await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}`,{
+        method:'POST',
+        headers:{...headers,'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify(batch)
+      });
+      if(!r.ok) throw new Error(await r.text());
+      ok+=batch.length;
+    }
+
+    status.style.background='rgba(34,197,94,.1)';status.style.color='var(--green)';status.style.border='1px solid rgba(34,197,94,.2)';
+    status.textContent=`✓ ${ok} registros actualizados correctamente.`;
+    await loadData();
+
+  } catch(e) {
+    status.style.background='rgba(239,68,68,.1)';status.style.color='var(--red)';status.style.border='1px solid rgba(239,68,68,.2)';
+    status.textContent='✕ Error: '+e.message;
+  }
+}
+
+// ── CLAUDE TEXT / AUDIO ────────────────────────────────────────────────────────
+let mediaRecorder=null, audioChunks=[], isRecording=false;
+
+async function toggleRecord() {
+  const btn=document.getElementById('btn-record');
+  const statusEl=document.getElementById('record-status');
+
+  if (!isRecording) {
+    try {
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      audioChunks=[];
+      mediaRecorder=new MediaRecorder(stream);
+      mediaRecorder.ondataavailable=e=>audioChunks.push(e.data);
+      mediaRecorder.onstop=async()=>{
+        stream.getTracks().forEach(t=>t.stop());
+        statusEl.textContent='⟳ Transcribiendo audio...';
+        const blob=new Blob(audioChunks,{type:'audio/webm'});
+        // Convert to base64 and send to Claude for transcription
+        const reader=new FileReader();
+        reader.onload=async()=>{
+          const b64=reader.result.split(',')[1];
+          try {
+            const resp=await fetch('https://api.anthropic.com/v1/messages',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({
+                model:'claude-sonnet-4-6',
+                max_tokens:500,
+                messages:[{role:'user',content:[
+                  {type:'text',text:'Transcribe este audio exactamente como fue dicho, sin agregar nada:'},
+                  {type:'document',source:{type:'base64',media_type:'audio/webm',data:b64}}
+                ]}]
+              })
+            });
+            const data=await resp.json();
+            if(data.content?.[0]?.text){
+              document.getElementById('claude-input').value=data.content[0].text;
+              statusEl.textContent='✓ Audio transcrito';
+            } else {
+              statusEl.textContent='No se pudo transcribir. Escribe la orden manualmente.';
+            }
+          } catch(e){
+            statusEl.textContent='Error transcribiendo. Escribe la orden manualmente.';
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+      mediaRecorder.start();
+      isRecording=true;
+      btn.textContent='⏹ Detener grabación';
+      btn.style.background='var(--red-bg)';btn.style.color='var(--red)';btn.style.border='1px solid rgba(239,68,68,.3)';
+      statusEl.textContent='🔴 Grabando...';
+    } catch(e){
+      statusEl.textContent='No se pudo acceder al micrófono.';
+    }
+  } else {
+    mediaRecorder.stop();
+    isRecording=false;
+    btn.textContent='🎤 Grabar audio';
+    btn.style.background='';btn.style.color='';btn.style.border='';
+  }
+}
+
+async function sendToClaude() {
+  const orden=document.getElementById('claude-input').value.trim();
+  if(!orden){alert('Escribe una orden primero.');return;}
+
+  const statusEl=document.getElementById('claude-status');
+  const btn=document.getElementById('btn-claude');
+  statusEl.style.display='block';
+  statusEl.style.background='rgba(234,179,8,.1)';statusEl.style.color='var(--yellow)';statusEl.style.border='1px solid rgba(234,179,8,.2)';
+  statusEl.textContent='⟳ Claude está interpretando tu orden...';
+  btn.disabled=true;
+
+  // Build context of current projects and hitos
+  const ctx=PROYECTOS.map(p=>p.nombre).join(', ');
+  const hitosCtx=HITOS.map(h=>`${h.id} (${h.seccion} → ${h.tarea})`).join('\n');
+  const estadosValidos='no_iniciado, pendiente, en_proceso, completado, no_aplica';
+
+  const systemPrompt=`Eres un asistente que actualiza una base de datos de proyectos inmobiliarios.
+Los proyectos son: ${ctx}
+Los hitos disponibles (id → sección → tarea):
+${hitosCtx}
+Estados válidos: ${estadosValidos}
+
+El usuario dará una orden en lenguaje natural. Debes responder ÚNICAMENTE con un array JSON de objetos con esta estructura exacta, sin texto adicional:
+[{"proyecto_id":"id_proyecto","hito_id":"id_hito","estado":"estado","fecha_proxima_interaccion":"YYYY-MM-DD o null","descripcion_interaccion":"texto","notas":"texto"}]
+
+Si la fecha no se menciona, usa null. Si algún campo no se menciona, omítelo del objeto.
+Infiere el proyecto_id y hito_id desde los nombres que use el usuario.`;
+
+  try {
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens:1000,
+        system:systemPrompt,
+        messages:[{role:'user',content:orden}]
+      })
+    });
+    const data=await resp.json();
+    const text=data.content?.[0]?.text||'';
+
+    // Parse JSON from response
+    const match=text.match(/\[[\s\S]*\]/);
+    if(!match) throw new Error('Claude no devolvió el formato esperado: '+text.slice(0,200));
+
+    const changes=JSON.parse(match[0]);
+    if(!changes.length) throw new Error('No se identificaron cambios en la orden.');
+
+    statusEl.textContent=`⟳ Aplicando ${changes.length} cambio(s)...`;
+
+    // Enrich with proyecto_nombre, seccion, tarea before upsert
+    const toUpsert=changes.map(c=>{
+      const proy=PROYECTOS.find(p=>p.id===c.proyecto_id);
+      const hito=HITOS.find(h=>h.id===c.hito_id);
+      if(!proy||!hito) return null;
+      return {
+        proyecto_id:c.proyecto_id,
+        proyecto_nombre:proy.nombre,
+        hito_id:c.hito_id,
+        seccion:hito.seccion,
+        tarea:hito.tarea,
+        estado:c.estado||getRow(c.proyecto_id,c.hito_id).estado||'no_iniciado',
+        fecha_proxima_interaccion:c.fecha_proxima_interaccion||null,
+        descripcion_interaccion:c.descripcion_interaccion??getRow(c.proyecto_id,c.hito_id).descripcion_interaccion??'',
+        notas:c.notas??getRow(c.proyecto_id,c.hito_id).notas??'',
+      };
+    }).filter(Boolean);
+
+    const r=await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}`,{
+      method:'POST',
+      headers:{...headers,'Prefer':'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify(toUpsert)
+    });
+    if(!r.ok) throw new Error(await r.text());
+
+    statusEl.style.background='rgba(34,197,94,.1)';statusEl.style.color='var(--green)';statusEl.style.border='1px solid rgba(34,197,94,.2)';
+    const resumen=toUpsert.map(c=>`• ${c.proyecto_nombre} → ${c.tarea}: ${c.estado}`).join('\n');
+    statusEl.innerHTML='✓ Cambios aplicados:<br><pre style="margin-top:6px;font-size:11px;opacity:.8">'+resumen+'</pre>';
+    document.getElementById('claude-input').value='';
+    await loadData();
+
+  } catch(e){
+    statusEl.style.background='rgba(239,68,68,.1)';statusEl.style.color='var(--red)';statusEl.style.border='1px solid rgba(239,68,68,.2)';
+    statusEl.textContent='✕ Error: '+e.message;
+  } finally {
+    btn.disabled=false;
+  }
+}
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.getElementById('today-badge').textContent='Hoy: '+TODAY.toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'});
