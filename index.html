@@ -257,20 +257,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     </div>
   </div>
 
-  <!-- CLAUDE TEXT/AUDIO -->
-  <div class="card">
-    <div class="card-header"><span class="card-title">✏️ Actualizar con orden de texto o audio</span></div>
+  <!-- CLAUDE TEXT/AUDIO - PRÓXIMAMENTE -->
+  <div class="card" style="opacity:.6;pointer-events:none">
+    <div class="card-header" style="justify-content:space-between">
+      <span class="card-title">🎤 Actualizar con orden de texto o audio</span>
+      <span style="background:rgba(59,130,246,.15);color:var(--accent2);border:1px solid rgba(59,130,246,.3);border-radius:20px;padding:3px 12px;font-size:10px;font-weight:700;letter-spacing:.5px">PRÓXIMAMENTE</span>
+    </div>
     <div class="update-body">
-      <p class="update-desc">Escribe o graba una orden en lenguaje natural. Se generará el SQL listo para pegar en el <a href="https://supabase.com/dashboard/project/yaxyqrykeavuhqjwvwji/sql/new" target="_blank" style="color:var(--accent2)">SQL Editor de Supabase</a>.</p>
-      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:flex-start">
-        <textarea id="claude-input" placeholder="Ej: Vilcun, Firma contrato ancla: estado en proceso, fecha 15/08/2026, descripción: reunión confirmada con ancla..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;padding:10px 12px;font-family:inherit;outline:none;resize:vertical;min-height:80px;transition:border-color .15s" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
-      </div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button onclick="generateSQL()" class="btn btn-accent" id="btn-claude">⚡ Generar SQL</button>
-        <button onclick="toggleRecord()" class="btn btn-ghost" id="btn-record">🎤 Grabar audio</button>
-        <span id="record-status" style="font-size:11px;color:var(--text-muted)"></span>
-      </div>
-      <div id="claude-status" style="display:none;margin-top:12px;border-radius:8px;font-size:12px;line-height:1.5"></div>
+      <p class="update-desc" style="margin-bottom:0">Actualización via lenguaje natural (texto o voz) integrada con IA. Disponible próximamente.</p>
     </div>
   </div>
 </main>
