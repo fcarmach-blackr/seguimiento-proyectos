@@ -259,18 +259,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   <!-- CLAUDE TEXT/AUDIO -->
   <div class="card">
-    <div class="card-header"><span class="card-title">🎤 Actualizar con orden de texto o audio</span></div>
+    <div class="card-header"><span class="card-title">✏️ Actualizar con orden de texto o audio</span></div>
     <div class="update-body">
-      <p class="update-desc">Escribe una orden en lenguaje natural o graba un audio. Claude interpretará los cambios y los aplicará directamente a la base de datos.</p>
+      <p class="update-desc">Escribe o graba una orden en lenguaje natural. Se generará el SQL listo para pegar en el <a href="https://supabase.com/dashboard/project/yaxyqrykeavuhqjwvwji/sql/new" target="_blank" style="color:var(--accent2)">SQL Editor de Supabase</a>.</p>
       <div style="display:flex;gap:10px;margin-bottom:12px;align-items:flex-start">
         <textarea id="claude-input" placeholder="Ej: Vilcun, Firma contrato ancla: estado en proceso, fecha 15/08/2026, descripción: reunión confirmada con ancla..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;padding:10px 12px;font-family:inherit;outline:none;resize:vertical;min-height:80px;transition:border-color .15s" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
       </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button onclick="sendToClaude()" class="btn btn-accent" id="btn-claude">✨ Aplicar cambios</button>
+        <button onclick="generateSQL()" class="btn btn-accent" id="btn-claude">⚡ Generar SQL</button>
         <button onclick="toggleRecord()" class="btn btn-ghost" id="btn-record">🎤 Grabar audio</button>
         <span id="record-status" style="font-size:11px;color:var(--text-muted)"></span>
       </div>
-      <div id="claude-status" style="display:none;margin-top:12px;padding:12px;border-radius:8px;font-size:12px;line-height:1.5"></div>
+      <div id="claude-status" style="display:none;margin-top:12px;border-radius:8px;font-size:12px;line-height:1.5"></div>
     </div>
   </div>
 </main>
@@ -823,7 +823,8 @@ async function toggleRecord() {
   }
 }
 
-async function sendToClaude() {
+// generateSQL parses the order locally and produces SQL for Supabase
+function generateSQL() {
   const orden=document.getElementById('claude-input').value.trim();
   if(!orden){alert('Escribe una orden primero.');return;}
 
